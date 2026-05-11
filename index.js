@@ -312,6 +312,7 @@ async function main() {
 
       const byPid = [];
       for (const pid of pids) {
+        if (pid === process.pid) continue;
         const { results, capped } = scanPid(pid, seen);
         if (results.length) byPid.push({ pid, results, capped });
         totalMatches += results.length;
@@ -341,6 +342,10 @@ async function main() {
     console.log(`\nScanning "${name}" (${pids.length} instance${pids.length > 1 ? 's' : ''})...\n`);
 
     for (const pid of pids) {
+      if (pid === process.pid) {
+        console.log(`  PID ${pid}  —  skipped (this process)`);
+        continue;
+      }
       const { results, capped } = scanPid(pid, seen);
       console.log(`  PID ${pid}  —  ${results.length ? `${results.length} match(es)` : 'no matches'}`);
       printMatches(results);
