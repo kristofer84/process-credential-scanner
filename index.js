@@ -105,7 +105,7 @@ const CRED_PATTERNS = [
   // Generic key=value or key: value password pair
   {
     label: 'kv_password',
-    re: /(?:^|[\s,{;])(?:password|passwd|pwd)\s*[=:]\s*([^\s"'\x00&,\r\n]{4,60})/gim,
+    re: /[\s,{;](?:password|passwd|pwd)\s*[=:]\s*([^\s"'\x00&,\r\n]{4,60})/gi,
   },
 ];
 
@@ -188,45 +188,68 @@ async function promptSelection(names, grouped) {
   });
 }
 
-// Returns an array of { label, display } — does not print anything.
+const MAX_RESULTS_PER_PID = 500;
+
+// Returns { results: [{ label, display }], capped: bool } — does not print anything.
 function scanPid(pid, seen) {
   const handle = kernel32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid);
-  if (ref.isNull(handle)) return [];
+  if (ref.isNull(handle)) return { results: [], capped: false };
 
   const results = [];
+  let capped = false;
 
   try {
     let address = 0n;
     const mbiBuffer    = Buffer.alloc(MBI_SIZE);
     const bytesReadBuf = Buffer.alloc(8);
 
+    outer:
     while (kernel32.VirtualQueryEx(handle, address.toString(), mbiBuffer, MBI_SIZE)) {
       const mbi      = parseMBI(mbiBuffer);
       const readable = mbi.State === MEM_COMMIT && mbi.Protect === PAGE_READWRITE;
 
-      // Skip regions larger than 256 MB to avoid OOM
-      if (readable && mbi.RegionSize > 0n && mbi.RegionSize <= 0x10000000n) {
+      // Skip regions larger than 64 MB to limit peak Buffer allocation
+      if (readable && mbi.RegionSize > 0n && mbi.RegionSize <= 0x4000000n) {
         const size   = Number(mbi.RegionSize);
         const memBuf = Buffer.alloc(size);
 
         if (kernel32.ReadProcessMemory(handle, mbi.BaseAddress.toString(), memBuf, size, bytesReadBuf)) {
+          // Skip regions with high null-byte density — UTF-16 (V8 heap) or binary data.
+          // Sampling 2 KB is enough; full scan of a 64 MB buffer for null bytes would be slow.
+          const sampleSize = Math.min(2048, size);
+          let nulls = 0;
+          for (let b = 0; b < sampleSize; b++) if (memBuf[b] === 0) nulls++;
+          if (nulls / sampleSize > 0.3) {
+            const next = mbi.BaseAddress + mbi.RegionSize;
+            if (next <= address || next > 0x7FFFFFFFFFFFFn) break;
+            address = next;
+            continue;
+          }
+
           const text = memBuf.toString('utf8');
 
           for (const { label, re, truncate } of CRED_PATTERNS) {
             re.lastIndex = 0;
             let m;
             while ((m = re.exec(text)) !== null) {
-              const raw     = m[0].replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '.');
-              const deduped = `${label}:${raw}`;
+              // Dedup on captured values only (not the surrounding context chars that
+              // vary between occurrences of the same credential in different memory regions).
+              const captured = m.slice(1).filter(Boolean).join(':');
+              const raw      = m[0].replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '.');
+              const deduped  = `${label}:${captured || raw}`;
               if (seen.has(deduped)) continue;
               seen.add(deduped);
 
-              const captured = m.slice(1).filter(Boolean).join('  |  ');
-              let display = captured || raw;
+              let display = captured.replace(/:/g, '  |  ') || raw;
               if (truncate && display.length > 120) {
                 display = display.slice(0, 120) + `  ... [${display.length} chars total]`;
               }
               results.push({ label, display });
+
+              if (results.length >= MAX_RESULTS_PER_PID) {
+                capped = true;
+                break outer;
+              }
             }
           }
         }
@@ -240,7 +263,7 @@ function scanPid(pid, seen) {
     kernel32.CloseHandle(handle);
   }
 
-  return results;
+  return { results, capped };
 }
 
 function printMatches(results) {
@@ -289,8 +312,8 @@ async function main() {
 
       const byPid = [];
       for (const pid of pids) {
-        const results = scanPid(pid, seen);
-        if (results.length) byPid.push({ pid, results });
+        const { results, capped } = scanPid(pid, seen);
+        if (results.length) byPid.push({ pid, results, capped });
         totalMatches += results.length;
       }
 
@@ -298,9 +321,10 @@ async function main() {
         // Lock in the progress line and print the match block below it.
         process.stdout.write('\n');
         console.log(`\n  ${name}`);
-        for (const { pid, results } of byPid) {
+        for (const { pid, results, capped } of byPid) {
           if (pids.length > 1) console.log(`    PID ${pid}`);
           printMatches(results);
+          if (capped) console.log(`    [capped at ${MAX_RESULTS_PER_PID} — re-run targeting this process for full output]`);
         }
         console.log();
         matchedProcesses++;
@@ -317,9 +341,10 @@ async function main() {
     console.log(`\nScanning "${name}" (${pids.length} instance${pids.length > 1 ? 's' : ''})...\n`);
 
     for (const pid of pids) {
-      const results = scanPid(pid, seen);
+      const { results, capped } = scanPid(pid, seen);
       console.log(`  PID ${pid}  —  ${results.length ? `${results.length} match(es)` : 'no matches'}`);
       printMatches(results);
+      if (capped) console.log(`  [capped at ${MAX_RESULTS_PER_PID} — increase MAX_RESULTS_PER_PID if needed]`);
       if (results.length) console.log();
       totalMatches += results.length;
     }
