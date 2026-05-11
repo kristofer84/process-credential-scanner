@@ -1,0 +1,16 @@
+{
+  "name": "edge-saved-passwords-dumper",
+  "version": "1.0.0",
+  "description": "Educational tool demonstrating Edge stores credentials in cleartext in process memory",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "ffi-napi": "^4.0.3",
+    "ref-napi": "^3.0.3"
+  },
+  "engines": {
+    "node": ">=12.0.0"
+  }
+}

@@ -1,12 +1,14 @@
 ## EdgeSavedPasswordsDumper
 *A small educational tool demonstrating that Edge stores credentials in cleartext in process memory.*
 
+> **Note:** This is a Node.js port of the original C# tool by [L1v1ng0ffTh3L4N](https://github.com/L1v1ng0ffTh3L4N/EdgeSavedPasswordsDumper).
+
 ---
 
 ## Overview
-This project is a simple C#/.NET 3.5 tool created to demonstrate that Edge stores credentials in cleartext in memory. It is intended for **educational and research purposes only**, especially for understanding memory inspection, credential handling, and security design differences across software.
+This project demonstrates that Edge stores credentials in cleartext in memory. It is intended for **educational and research purposes only**, especially for understanding memory inspection, credential handling, and security design differences across software.
 
-I am **not an experienced C# developer**, so the code may contain rough edges, inefficiencies, or non‑idiomatic patterns. Contributions, improvements, and suggestions are welcome.
+The Node.js version uses `ffi-napi` to call the same Win32 APIs (`OpenProcess`, `VirtualQueryEx`, `ReadProcessMemory`) as the original, and PowerShell for WMI process enumeration.
 
 ---
 
@@ -31,12 +33,19 @@ You accept full responsibility for ensuring your actions comply with all legal a
 ---
 
 ## Features
-- Demonstrates that Edge stores save credentials in clear text in memory
-- .NET 3.5 code in order to avoid potential future AMSI related issues
+- Demonstrates that Edge stores saved credentials in clear text in memory
+- Node.js with native Win32 bindings via `ffi-napi`
 
 ---
 
 ## Requirements
 - Edge 147.0.3912.98 or older
-- .NET Framework **3.5**  
-- Administrator rights (to be able to read other users Edge processes memory)  
+- Node.js 12+
+- Administrator rights (to be able to read other users' Edge process memory)
+
+## Installation
+
+```
+npm install
+node index.js
+```
