@@ -146,12 +146,12 @@ function buildProcessMenu(processes) {
     if (!grouped.has(name)) grouped.set(name, []);
     grouped.get(name).push(Number(p.Id));
   }
-  // sorted list of unique names
   const names = [...grouped.keys()].sort((a, b) => a.localeCompare(b));
   return { grouped, names };
 }
 
 function printProcessMenu(names, grouped) {
+  console.log('\n     0  [Scan all processes]');
   console.log('\n  #     Process Name                             Instances');
   console.log('  ----  ---------------------------------------- ---------');
   for (let i = 0; i < names.length; i++) {
@@ -167,17 +167,17 @@ function printProcessMenu(names, grouped) {
 async function promptSelection(names, grouped) {
   return new Promise((resolve) => {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    rl.question('\nEnter number or partial name: ', (answer) => {
+    rl.question('\nEnter number or partial name (0 = scan all): ', (answer) => {
       rl.close();
       const trimmed = answer.trim();
-      const idx = parseInt(trimmed, 10) - 1;
 
+      if (trimmed === '0') return resolve({ all: true });
+
+      const idx = parseInt(trimmed, 10) - 1;
       if (!isNaN(idx) && idx >= 0 && idx < names.length) {
-        const name = names[idx];
-        return resolve({ name, pids: grouped.get(name) });
+        return resolve({ name: names[idx], pids: grouped.get(names[idx]) });
       }
 
-      // Fall back to partial name match
       const lower = trimmed.toLowerCase();
       const match = names.find(n => n.toLowerCase().includes(lower));
       if (match) return resolve({ name: match, pids: grouped.get(match) });
@@ -188,15 +188,16 @@ async function promptSelection(names, grouped) {
   });
 }
 
+// Returns an array of { label, display } — does not print anything.
 function scanPid(pid, seen) {
   const handle = kernel32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid);
-  if (ref.isNull(handle)) return 0;
+  if (ref.isNull(handle)) return [];
 
-  let matches = 0;
+  const results = [];
 
   try {
     let address = 0n;
-    const mbiBuffer   = Buffer.alloc(MBI_SIZE);
+    const mbiBuffer    = Buffer.alloc(MBI_SIZE);
     const bytesReadBuf = Buffer.alloc(8);
 
     while (kernel32.VirtualQueryEx(handle, address.toString(), mbiBuffer, MBI_SIZE)) {
@@ -215,7 +216,6 @@ function scanPid(pid, seen) {
             re.lastIndex = 0;
             let m;
             while ((m = re.exec(text)) !== null) {
-              // Sanitise control chars for display, keep the full match as dedup key
               const raw     = m[0].replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '.');
               const deduped = `${label}:${raw}`;
               if (seen.has(deduped)) continue;
@@ -224,10 +224,9 @@ function scanPid(pid, seen) {
               const captured = m.slice(1).filter(Boolean).join('  |  ');
               let display = captured || raw;
               if (truncate && display.length > 120) {
-                display = display.slice(0, 120) + `  … [${display.length} chars]`;
+                display = display.slice(0, 120) + `  ... [${display.length} chars total]`;
               }
-              console.log(`  [${label}] ${display}`);
-              matches++;
+              results.push({ label, display });
             }
           }
         }
@@ -241,7 +240,13 @@ function scanPid(pid, seen) {
     kernel32.CloseHandle(handle);
   }
 
-  return matches;
+  return results;
+}
+
+function printMatches(results) {
+  for (const { label, display } of results) {
+    console.log(`    [${label}] ${display}`);
+  }
 }
 
 async function main() {
@@ -267,20 +272,60 @@ async function main() {
   const selection = await promptSelection(names, grouped);
   if (!selection) process.exit(0);
 
-  const { name, pids } = selection;
-  console.log(`\nScanning "${name}" (${pids.length} instance${pids.length > 1 ? 's' : ''})...\n`);
+  const seen = new Set();
+  let totalMatches = 0;
 
-  const seen  = new Set();
-  let total   = 0;
+  if (selection.all) {
+    // Full scan — progress line overwrites in place; only processes with matches get a section.
+    console.log(`\nScanning all ${names.length} processes...\n`);
+    let matchedProcesses = 0;
+    const PROGRESS_WIDTH = 70;
 
-  for (const pid of pids) {
-    process.stdout.write(`  PID ${String(pid).padEnd(8)}`);
-    const count = scanPid(pid, seen);
-    console.log(count > 0 ? `${count} match(es)` : 'no matches');
-    total += count;
+    for (let i = 0; i < names.length; i++) {
+      const name = names[i];
+      const pids = grouped.get(name);
+      const progress = `  [${String(i + 1).padStart(4)}/${names.length}]  ${name}`;
+      process.stdout.write(`\r${progress.padEnd(PROGRESS_WIDTH)}`);
+
+      const byPid = [];
+      for (const pid of pids) {
+        const results = scanPid(pid, seen);
+        if (results.length) byPid.push({ pid, results });
+        totalMatches += results.length;
+      }
+
+      if (byPid.length) {
+        // Lock in the progress line and print the match block below it.
+        process.stdout.write('\n');
+        console.log(`\n  ${name}`);
+        for (const { pid, results } of byPid) {
+          if (pids.length > 1) console.log(`    PID ${pid}`);
+          printMatches(results);
+        }
+        console.log();
+        matchedProcesses++;
+      }
+    }
+
+    // Clear the progress line.
+    process.stdout.write(`\r${' '.repeat(PROGRESS_WIDTH)}\r`);
+    console.log(`Scan complete — ${totalMatches} unique match(es) across ${matchedProcesses} process(es).`);
+
+  } else {
+    // Single process scan — show a section per PID, matches indented.
+    const { name, pids } = selection;
+    console.log(`\nScanning "${name}" (${pids.length} instance${pids.length > 1 ? 's' : ''})...\n`);
+
+    for (const pid of pids) {
+      const results = scanPid(pid, seen);
+      console.log(`  PID ${pid}  —  ${results.length ? `${results.length} match(es)` : 'no matches'}`);
+      printMatches(results);
+      if (results.length) console.log();
+      totalMatches += results.length;
+    }
+
+    console.log(`\nTotal: ${totalMatches} unique match(es)`);
   }
-
-  console.log(`\nTotal unique matches: ${total}`);
 }
 
 main().catch(err => {
