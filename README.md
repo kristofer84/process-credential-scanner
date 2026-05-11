@@ -1,7 +1,7 @@
 ## ProcessCredentialScanner
 *A Node.js tool that scans Windows process memory for cleartext credentials and secrets — useful for assessing whether an application leaks sensitive data in memory.*
 
-Originally based on [EdgeSavedPasswordsDumper](https://github.com/L1v1ng0ffTh3L4N/EdgeSavedPasswordsDumper), which demonstrated that Edge stores saved credentials in cleartext in process memory. This tool generalises that technique to any running process.
+Inspired by research showing that Chromium-based browsers store saved credentials in cleartext in process memory. This tool generalises that technique to any running process.
 
 ---
 
