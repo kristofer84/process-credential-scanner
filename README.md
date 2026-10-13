@@ -45,3 +45,16 @@ Each match is printed with its pattern label. Private key blocks are truncated i
 - Skips memory regions larger than 256 MB to avoid OOM.
 - Results are deduplicated across all PIDs of the selected process.
 - Pattern quality varies by application — connection string and PEM patterns are high-precision; `kv_password` and `form_encoded` may produce noise against unknown targets and may need regex tuning.
+
+## Scope and disclaimer
+
+A demonstration, not a tool. The point is the finding: memory-based credential managers
+are only as private as the process they run in. It is provided as-is, without warranty of
+any kind.
+
+Reading another process's memory requires elevation and will be flagged by EDR. Do not
+run it against machines or processes you do not own or administer, and do not use it to
+collect credentials you are not authorised to hold. Misuse is on the operator, not the
+author.
+
+MIT licensed — see [LICENSE](LICENSE).
